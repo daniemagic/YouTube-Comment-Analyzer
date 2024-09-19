@@ -1,11 +1,3 @@
-# comment.py
-
-# Required packages:
-# - google-api-python-client
-# - subprocess
-# - sys
-# - os
-
 import sys
 import os
 import subprocess
@@ -145,11 +137,11 @@ def create_prompt(comments, video_title):
     prompt = f"""
 You are an AI assistant analyzing YouTube comments on the video titled '{video_title}'. Your goal is to provide a structured and concise summary of the comments for the YouTuber in order for them to better make decisions in the following format:
 
-1. **Overall Sentiment**: Summarize the general tone of the comments, focusing on what viewers liked or disliked.
+1. **Overall Sentiment**: Summarize the general sentiment of the comments and give specific details on what viewers liked or disliked.
 
-2. **Questions or Confusion**: List common questions or points of confusion that viewers raised.
+2. **Questions or Confusion**: List common questions or points of confusion that viewers had.
 
-3. **Suggestions for Future Videos**: Summarize any suggestions or ideas from viewers about what they would like to see next.
+3. **Suggestions for Future Videos**: Summarize any suggestions or ideas from viewers about what they would like to see next. Sometimes viewer suggestions are not good but you can take the essence of what they're trying to say and incorporate it in a better way. Try to do that as well.
 
 Do not skip any sections. If there is no information for a section, explicitly state "No specific information provided."
 
@@ -204,11 +196,17 @@ def main():
         print('Failed to get channel ID. Please check your input and try again.')
         sys.exit(1)
 
+    # Get the number of videos to analyze
+    num_videos = int(input('How many of the latest videos do you want to analyze? '))
+
+    # Get the number of comments to fetch per video
+    max_comments = int(input('What is the maximum number of comments to fetch per video? '))
+
     # Get the uploads playlist ID
     uploads_playlist_id = get_uploads_playlist_id(youtube, channel_id)
 
-    # Get the last 3 video IDs
-    video_ids = get_last_n_video_ids(youtube, uploads_playlist_id, n=3)
+    # Get the last N video IDs
+    video_ids = get_last_n_video_ids(youtube, uploads_playlist_id, n=num_videos)
 
     # Get the video titles
     video_titles = {video_id: get_video_title(youtube, video_id) for video_id in video_ids}
@@ -219,7 +217,7 @@ def main():
         print(f'\nProcessing analysis for video: {title}')
 
         # Get comments
-        comments = get_video_comments(youtube, video_id, max_comments=10)
+        comments = get_video_comments(youtube, video_id, max_comments=max_comments)
         if not comments:
             print('No comments found for this video.')
             continue
