@@ -1,241 +1,203 @@
+import io
 import sys
-import os
+import json
 import subprocess
+import logging
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
-# Function to get the channel ID from various types of inputs
+# Set up logging
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Set console output encoding to UTF-8
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 def get_channel_id(youtube, channel_input):
-    if 'youtube.com' in channel_input:
-        # It's a URL
-        if '/channel/' in channel_input:
-            # URL is like https://www.youtube.com/channel/CHANNEL_ID
-            channel_id = channel_input.split('/channel/')[1].split('/')[0]
-        elif '/user/' in channel_input:
-            # URL is like https://www.youtube.com/user/USERNAME
-            username = channel_input.split('/user/')[1].split('/')[0]
-            # Use API to get channel ID from username
-            response = youtube.channels().list(
-                part='id',
-                forUsername=username
-            ).execute()
-            if 'items' in response and response['items']:
-                channel_id = response['items'][0]['id']
-            else:
-                # Fallback to search method
-                search_response = youtube.search().list(
-                    part='id',
-                    q=username,
-                    type='channel',
-                    maxResults=1
-                ).execute()
-                if 'items' in search_response and search_response['items']:
-                    channel_id = search_response['items'][0]['id']['channelId']
-                else:
-                    print('Channel not found.')
-                    channel_id = None
-        elif '/c/' in channel_input:
-            # URL is like https://www.youtube.com/c/CUSTOMNAME
-            custom_name = channel_input.split('/c/')[1].split('/')[0]
-            # Use search API to find the channel
-            response = youtube.search().list(
-                part='id',
-                q=custom_name,
-                type='channel',
-                maxResults=1
-            ).execute()
-            if 'items' in response and response['items']:
-                channel_id = response['items'][0]['id']['channelId']
-            else:
-                print('Channel not found.')
-                channel_id = None
+    try:
+        if 'youtube.com' in channel_input:
+            if '/channel/' in channel_input:
+                return channel_input.split('/channel/')[1].split('/')[0]
+            elif '/user/' in channel_input:
+                username = channel_input.split('/user/')[1].split('/')[0]
+                response = youtube.channels().list(part='id', forUsername=username).execute()
+                return response['items'][0]['id'] if 'items' in response else None
+            elif '/c/' in channel_input:
+                custom_name = channel_input.split('/c/')[1].split('/')[0]
+                response = youtube.search().list(part='id', q=custom_name, type='channel', maxResults=1).execute()
+                return response['items'][0]['id']['channelId'] if 'items' in response else None
+        elif channel_input.startswith('UC'):
+            return channel_input
         else:
-            print('Unable to parse channel URL.')
-            channel_id = None
-    elif channel_input.startswith('UC'):
-        # It's a channel ID
-        channel_id = channel_input
-    else:
-        # Assume it's a channel name or username
-        query = channel_input
-        # Use search API to find the channel
-        search_response = youtube.search().list(
-            q=query,
-            type='channel',
-            part='id',
-            maxResults=1
-        ).execute()
-        if 'items' in search_response and search_response['items']:
-            channel_id = search_response['items'][0]['id']['channelId']
-        else:
-            print('Channel not found.')
-            channel_id = None
-    return channel_id
+            response = youtube.search().list(q=channel_input, type='channel', part='id', maxResults=1).execute()
+            return response['items'][0]['id']['channelId'] if 'items' in response else None
+    except Exception as e:
+        logger.error(f"Error in get_channel_id: {str(e)}")
+        return None
 
-# Function to get the uploads playlist ID of the channel
 def get_uploads_playlist_id(youtube, channel_id):
-    response = youtube.channels().list(
-        part='contentDetails',
-        id=channel_id
-    ).execute()
-    uploads_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
-    return uploads_playlist_id
+    try:
+        response = youtube.channels().list(part='contentDetails', id=channel_id).execute()
+        return response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+    except Exception as e:
+        logger.error(f"Error in get_uploads_playlist_id: {str(e)}")
+        return None
 
-# Function to get the last N video IDs from the uploads playlist
 def get_last_n_video_ids(youtube, playlist_id, n=3):
-    video_ids = []
-    next_page_token = None
-    while len(video_ids) < n:
-        response = youtube.playlistItems().list(
-            part='contentDetails',
-            playlistId=playlist_id,
-            maxResults=n,
-            pageToken=next_page_token
-        ).execute()
-        for item in response['items']:
-            video_ids.append(item['contentDetails']['videoId'])
-            if len(video_ids) == n:
+    try:
+        video_ids = []
+        next_page_token = None
+        while len(video_ids) < n:
+            response = youtube.playlistItems().list(
+                part='contentDetails',
+                playlistId=playlist_id,
+                maxResults=min(n - len(video_ids), 50),
+                pageToken=next_page_token
+            ).execute()
+            video_ids.extend([item['contentDetails']['videoId'] for item in response['items']])
+            next_page_token = response.get('nextPageToken')
+            if not next_page_token:
                 break
-        next_page_token = response.get('nextPageToken')
-        if not next_page_token:
-            break
-    return video_ids
+        return video_ids[:n]
+    except Exception as e:
+        logger.error(f"Error in get_last_n_video_ids: {str(e)}")
+        return []
 
-# Function to get the title of a video
 def get_video_title(youtube, video_id):
-    response = youtube.videos().list(
-        part='snippet',
-        id=video_id
-    ).execute()
-    title = response['items'][0]['snippet']['title']
-    return title
+    try:
+        response = youtube.videos().list(part='snippet', id=video_id).execute()
+        return response['items'][0]['snippet']['title']
+    except Exception as e:
+        logger.error(f"Error in get_video_title: {str(e)}")
+        return "Unknown Title"
 
-# Function to get comments from a video
 def get_video_comments(youtube, video_id, max_comments=10):
-    comments = []
-    next_page_token = None
-    while True:
-        response = youtube.commentThreads().list(
-            part='snippet',
-            videoId=video_id,
-            maxResults=100,
-            pageToken=next_page_token,
-            textFormat='plainText',
-            order='relevance'  # Fetch most relevant comments
-        ).execute()
-        for item in response['items']:
-            top_comment = item['snippet']['topLevelComment']['snippet']['textDisplay']
-            comments.append(top_comment)
-            if len(comments) >= max_comments:
-                return comments[:max_comments]
-        next_page_token = response.get('nextPageToken')
-        if not next_page_token or len(comments) >= max_comments:
-            break
-    return comments[:max_comments]
+    try:
+        comments = []
+        next_page_token = None
+        while len(comments) < max_comments:
+            response = youtube.commentThreads().list(
+                part='snippet',
+                videoId=video_id,
+                maxResults=min(max_comments - len(comments), 100),
+                pageToken=next_page_token,
+                textFormat='plainText',
+                order='relevance'
+            ).execute()
+            comments.extend([item['snippet']['topLevelComment']['snippet']['textDisplay'] for item in response['items']])
+            next_page_token = response.get('nextPageToken')
+            if not next_page_token:
+                break
+        return comments[:max_comments]
+    except Exception as e:
+        logger.error(f"Error in get_video_comments: {str(e)}")
+        return []
 
-# Function to create a clear prompt for Ollama
 def create_prompt(comments, video_title):
     prompt = f"""
-You are an AI assistant analyzing YouTube comments on the video titled '{video_title}'. Your goal is to provide a structured and concise summary of the comments for the YouTuber in order for them to better make decisions in the following format:
+Analyze YouTube comments for the video titled '{video_title}'. Provide a structured summary:
 
-1. **Overall Sentiment**: Summarize the general sentiment of the comments and give specific details on what viewers liked or disliked.
+1. Overall Sentiment: Summarize the general sentiment and specific likes/dislikes.
+2. Questions or Confusion: List common questions or points of confusion.
+3. Suggestions for Future Videos: Summarize viewer suggestions or ideas.
 
-2. **Questions or Confusion**: List common questions or points of confusion that viewers had.
+If no information for a section, state "No specific information provided."
 
-3. **Suggestions for Future Videos**: Summarize any suggestions or ideas from viewers about what they would like to see next. Sometimes viewer suggestions are not good but you can take the essence of what they're trying to say and incorporate it in a better way. Try to do that as well.
-
-Do not skip any sections. If there is no information for a section, explicitly state "No specific information provided."
-
-Thesee are the comments you're analyzing for the creator. DO NOT OUTPUT A RESPONSE TO THE COMMENTS, YOU ARE ANALYZING COMMENTS FOR THE CREATOR TO GIVE THEM A SUMMARY:
+Comments to analyze:
 {comments}
+
+Provide the summary in the specified format.
 """
     return prompt
 
-# Function to analyze comments using Ollama
 def analyze_comments(comments, video_title):
     prompt = create_prompt(comments, video_title)
-    
-    # Debugging: Print the prompt that will be sent to the LLM
-    print("\n----- DEBUG: Prompt being sent to Ollama -----\n")
-    print(prompt)
-    print("\n----- END OF DEBUG -----\n")
-    
     try:
-        # Run the prompt through Ollama's Mistral 7B model
         result = subprocess.run(
             ['ollama', 'run', 'mistral'],
-            input=prompt.encode('utf-8'),
+            input=prompt,  # Remove .encode('utf-8')
             capture_output=True,
-            check=True
+            check=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace'
         )
-        output = result.stdout.decode('utf-8').strip()
+        output = result.stdout.strip()
+        logger.debug(f"Ollama output: {output}")
+        return output
     except FileNotFoundError:
-        print("Error: 'ollama' command not found. Please ensure Ollama is installed and added to your system PATH.")
-        sys.exit(1)
+        error_msg = "Error: 'ollama' command not found. Please ensure Ollama is installed and added to your system PATH."
+        logger.error(error_msg)
+        return error_msg
     except subprocess.CalledProcessError as e:
-        print(f'Error during summarization: {e}')
-        output = ''
-    
-    return output
+        error_msg = f"Error during summarization: {str(e)}"
+        logger.error(error_msg)
+        return error_msg
 
+def main(api_key, channel_input, num_videos, max_comments):
+    try:
+        youtube = build('youtube', 'v3', developerKey=api_key)
+        
+        channel_id = get_channel_id(youtube, channel_input)
+        if not channel_id:
+            return json.dumps({'error': 'Failed to get channel ID. Please check your input and try again.'})
 
-# Main script execution
-def main():
-    # Prompt the user for their API key
-    api_key = input('Please enter your YouTube Data API v3 key: ').strip()
-    if not api_key:
-        print('API key is required to proceed.')
-        sys.exit(1)
+        uploads_playlist_id = get_uploads_playlist_id(youtube, channel_id)
+        if not uploads_playlist_id:
+            return json.dumps({'error': 'Failed to get uploads playlist ID.'})
 
-    # Build the YouTube API client
-    youtube = build('youtube', 'v3', developerKey=api_key)
+        video_ids = get_last_n_video_ids(youtube, uploads_playlist_id, n=num_videos)
+        if not video_ids:
+            return json.dumps({'error': 'Failed to get video IDs.'})
 
-    # Prompt the user for the YouTube channel input
-    channel_input = input('Please enter the YouTube channel ID, username, or URL: ').strip()
-    channel_id = get_channel_id(youtube, channel_input)
-    if not channel_id:
-        print('Failed to get channel ID. Please check your input and try again.')
-        sys.exit(1)
+        results = []
+        for video_id in video_ids:
+            title = get_video_title(youtube, video_id)
+            comments = get_video_comments(youtube, video_id, max_comments=max_comments)
+            
+            if not comments:
+                results.append({
+                    'title': title,
+                    'error': 'No comments found for this video.'
+                })
+                continue
 
-    # Get the number of videos to analyze
-    num_videos = int(input('How many of the latest videos do you want to analyze? '))
+            comments_text = '\n'.join(comments)
+            summary = analyze_comments(comments_text, title)
 
-    # Get the number of comments to fetch per video
-    max_comments = int(input('What is the maximum number of comments to fetch per video? '))
+            if not summary or 'error' in summary.lower():
+                results.append({
+                    'title': title,
+                    'error': summary if summary else 'No summary was generated for this video.'
+                })
+                continue
 
-    # Get the uploads playlist ID
-    uploads_playlist_id = get_uploads_playlist_id(youtube, channel_id)
+            sections = summary.split('\n\n')
+            analysis_result = {
+                'title': title,
+                'overallSentiment': sections[0] if len(sections) > 0 else 'No data',
+                'questionsOrConfusion': sections[1] if len(sections) > 1 else 'No data',
+                'suggestionsForFutureVideos': sections[2] if len(sections) > 2 else 'No data'
+            }
+            results.append(analysis_result)
 
-    # Get the last N video IDs
-    video_ids = get_last_n_video_ids(youtube, uploads_playlist_id, n=num_videos)
-
-    # Get the video titles
-    video_titles = {video_id: get_video_title(youtube, video_id) for video_id in video_ids}
-
-    # Analyze comments for each video
-    for video_id in video_ids:
-        title = video_titles[video_id]
-        print(f'\nProcessing analysis for video: {title}')
-
-        # Get comments
-        comments = get_video_comments(youtube, video_id, max_comments=max_comments)
-        if not comments:
-            print('No comments found for this video.')
-            continue
-
-        print(f'Fetched {len(comments)} comments.')
-
-        # Combine all comments into a single string
-        comments_text = '\n'.join(comments)
-
-        # Analyze comments using Ollama
-        summary = analyze_comments(comments_text, title)
-        if not summary:
-            print('No summary was generated for this video.')
-            continue
-
-        # Print final analysis
-        print(f'\nFinal Analysis for video: {title}')
-        print(summary)
+        logger.info(f"Final results: {results}")
+        return json.dumps(results, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"An unexpected error occurred: {str(e)}", exc_info=True)
+        return json.dumps({'error': f'An unexpected error occurred: {str(e)}'})
 
 if __name__ == '__main__':
-    main()
+    if len(sys.argv) != 5:
+        print(json.dumps({'error': "Usage: python comment.py <api_key> <channel_input> <num_videos> <max_comments>"}))
+        sys.exit(1)
+
+    api_key = sys.argv[1]
+    channel_input = sys.argv[2]
+    num_videos = int(sys.argv[3])
+    max_comments = int(sys.argv[4])
+
+    result = main(api_key, channel_input, num_videos, max_comments)
+    logger.info(f"Final output: {result}")
+    print(result)
