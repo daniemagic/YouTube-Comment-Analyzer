@@ -5,9 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>YouTube Comment Analyzer</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3-cloud@1.2.5/build/d3.layout.cloud.min.js"></script>
 </head>
 <body class="bg-gray-100">
-    <div class="container mx-auto p-4 max-w-3xl">
+    <div class="container mx-auto p-4 max-w-6xl">
         <h1 class="text-3xl font-bold mb-6">YouTube Comment Analyzer</h1>
         <form id="analyzeForm" class="space-y-4 mb-8">
             <div>
@@ -26,11 +29,21 @@
                 <label for="maxComments" class="block text-sm font-medium text-gray-700">Maximum Number of Comments per Video</label>
                 <input type="number" id="maxComments" value="10" min="1" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
             </div>
+            <div class="flex items-center space-x-4">
+                <div class="flex items-center">
+                    <input type="checkbox" id="includeSentiment" name="includeSentiment" class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                    <label for="includeSentiment" class="ml-2 block text-sm text-gray-900">Include Sentiment Analysis</label>
+                </div>
+                <div class="flex items-center">
+                    <input type="checkbox" id="includeWordCloud" name="includeWordCloud" class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                    <label for="includeWordCloud" class="ml-2 block text-sm text-gray-900">Include Word Cloud</label>
+                </div>
+            </div>
             <button type="submit" class="w-full py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
                 Analyze Comments
             </button>
         </form>
-        <div id="results" class="space-y-4"></div>
+        <div id="results" class="space-y-8"></div>
         <div id="error" class="mt-4 p-4 bg-red-100 text-red-700 rounded-md hidden"></div>
     </div>
     <script>
@@ -48,7 +61,9 @@
                 apiKey: document.getElementById('apiKey').value,
                 channelInput: document.getElementById('channelInput').value,
                 numVideos: parseInt(document.getElementById('numVideos').value),
-                maxComments: parseInt(document.getElementById('maxComments').value)
+                maxComments: parseInt(document.getElementById('maxComments').value),
+                includeSentiment: document.getElementById('includeSentiment').checked,
+                includeWordCloud: document.getElementById('includeWordCloud').checked
             };
 
             try {
@@ -80,49 +95,154 @@
         function displayResults(results) {
             const resultsContainer = document.getElementById('results');
             resultsContainer.innerHTML = '';
-            const errorDiv = document.getElementById('error');
 
             if (Array.isArray(results)) {
                 results.forEach((result, index) => {
                     const resultElement = document.createElement('div');
-                    resultElement.className = 'bg-white shadow overflow-hidden sm:rounded-lg mb-4';
-                    if (result.error) {
-                        resultElement.innerHTML = `
-                            <div class="px-4 py-5 sm:px-6">
-                                <h3 class="text-lg leading-6 font-medium text-red-600">Error: ${result.error}</h3>
-                            </div>
-                        `;
-                    } else {
-                        resultElement.innerHTML = `
-                            <div class="px-4 py-5 sm:px-6">
-                                <h3 class="text-lg leading-6 font-medium text-gray-900">${result.title}</h3>
-                            </div>
-                            <div class="border-t border-gray-200">
-                                <dl>
-                                    <div class="bg-gray-50 px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
-                                        <dt class="text-sm font-medium text-gray-500">Overall Sentiment</dt>
-                                        <dd class="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">${result.overallSentiment}</dd>
-                                    </div>
-                                    <div class="bg-white px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
-                                        <dt class="text-sm font-medium text-gray-500">Questions or Confusion</dt>
-                                        <dd class="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">${result.questionsOrConfusion}</dd>
-                                    </div>
-                                    <div class="bg-gray-50 px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
-                                        <dt class="text-sm font-medium text-gray-500">Suggestions for Future Videos</dt>
-                                        <dd class="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">${result.suggestionsForFutureVideos}</dd>
-                                    </div>
-                                </dl>
-                            </div>
-                        `;
+                    resultElement.className = 'bg-white shadow overflow-hidden sm:rounded-lg mb-8';
+                    let innerHtml = `
+                        <div class="px-4 py-5 sm:px-6">
+                            <h3 class="text-lg leading-6 font-bold text-gray-900">${result.title}</h3>
+                        </div>
+                        <div class="border-t border-gray-200">
+                    `;
+
+                    if (result.sentimentData || result.wordCloudData) {
+                        innerHtml += `<div class="grid grid-cols-1 md:grid-cols-2 gap-4 p-4">`;
+                        if (result.sentimentData) {
+                            innerHtml += `
+                                <div class="bg-gray-50 p-4 rounded-lg">
+                                    <h4 class="font-bold text-gray-700 mb-2">Sentiment Analysis</h4>
+                                    <canvas id="sentimentChart${index}" width="300" height="300"></canvas>
+                                </div>
+                            `;
+                        }
+                        if (result.wordCloudData) {
+                            innerHtml += `
+                                <div class="bg-gray-50 p-4 rounded-lg">
+                                    <h4 class="font-bold text-gray-700 mb-2">Common Words</h4>
+                                    <div id="wordCloud${index}" style="width: 100%; height: 300px;"></div>
+                                </div>
+                            `;
+                        }
+                        innerHtml += `</div>`;
                     }
+
+                    innerHtml += `
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 p-4">
+                                <div class="bg-gray-50 p-4 rounded-lg">
+                                    <h4 class="font-bold text-gray-700 mb-2">Overall Sentiment</h4>
+                                    <p class="text-sm text-gray-900">${formatContent(result.overallSentiment)}</p>
+                                </div>
+                                <div class="bg-gray-50 p-4 rounded-lg">
+                                    <h4 class="font-bold text-gray-700 mb-2">Viewer Engagement and Interaction</h4>
+                                    <p class="text-sm text-gray-900">${formatContent(result.viewerEngagement)}</p>
+                                </div>
+                                <div class="bg-gray-50 p-4 rounded-lg">
+                                    <h4 class="font-bold text-gray-700 mb-2">Questions or Points of Confusion</h4>
+                                    <p class="text-sm text-gray-900">${formatContent(result.questionsOrConfusion)}</p>
+                                </div>
+                                <div class="bg-gray-50 p-4 rounded-lg">
+                                    <h4 class="font-bold text-gray-700 mb-2">Suggestions for Future Videos</h4>
+                                    <p class="text-sm text-gray-900">${formatContent(result.suggestionsForFutureVideos)}</p>
+                                </div>
+                                <div class="bg-gray-50 p-4 rounded-lg">
+                                    <h4 class="font-bold text-gray-700 mb-2">Emerging Themes and Trends</h4>
+                                    <p class="text-sm text-gray-900">${formatContent(result.emergingThemes)}</p>
+                                </div>
+                                <div class="bg-gray-50 p-4 rounded-lg">
+                                    <h4 class="font-bold text-gray-700 mb-2">Creator Improvement Opportunities</h4>
+                                    <p class="text-sm text-gray-900">${formatContent(result.creatorImprovementOpportunities)}</p>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    resultElement.innerHTML = innerHtml;
                     resultsContainer.appendChild(resultElement);
+
+                    if (result.sentimentData) {
+                        createSentimentChart(result.sentimentData, `sentimentChart${index}`);
+                    }
+                    if (result.wordCloudData) {
+                        createWordCloud(result.wordCloudData, `wordCloud${index}`);
+                    }
                 });
-            } else if (results.error) {
-                errorDiv.textContent = `Error: ${results.error}`;
-                errorDiv.classList.remove('hidden');
             } else {
+                const errorDiv = document.getElementById('error');
                 errorDiv.textContent = 'Unexpected response format from the server.';
                 errorDiv.classList.remove('hidden');
+            }
+        }
+
+        function formatContent(text) {
+            // Remove section titles and numbering
+            text = text.replace(/^(Overall Sentiment|Viewer Engagement and Interaction|Questions or Points of Confusion|Suggestions for Future Videos|Emerging Themes and Trends|Creator Improvement Opportunities):\s*/i, '');
+            text = text.replace(/^\d+\.\s*-?\s*/, '');
+            // Bold text between asterisks
+            return text.replace(/\*(.*?)\*/g, '<strong>$1</strong>');
+        }
+
+        function createSentimentChart(sentimentData, chartId) {
+            const ctx = document.getElementById(chartId).getContext('2d');
+            new Chart(ctx, {
+                type: 'pie',
+                data: {
+                    labels: ['Positive', 'Neutral', 'Negative'],
+                    datasets: [{
+                        data: [sentimentData.positive, sentimentData.neutral, sentimentData.negative],
+                        backgroundColor: ['#4CAF50', '#FFC107', '#F44336']
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                        },
+                        title: {
+                            display: true,
+                            text: 'Comment Sentiment'
+                        }
+                    }
+                }
+            });
+        }
+
+        function createWordCloud(words, elementId) {
+            const width = document.getElementById(elementId).offsetWidth;
+            const height = 300;
+
+            // Clear any existing content
+            d3.select(`#${elementId}`).html("");
+
+            const layout = d3.layout.cloud()
+                .size([width, height])
+                .words(words.map(d => ({text: d.text, size: 10 + d.value * 90})))
+                .padding(5)
+                .rotate(() => ~~(Math.random() * 2) * 90)
+                .font("Arial")
+                .fontSize(d => d.size)
+                .on("end", draw);
+
+            layout.start();
+
+            function draw(words) {
+                d3.select(`#${elementId}`).append("svg")
+                    .attr("width", "100%")
+                    .attr("height", "100%")
+                    .attr("viewBox", `0 0 ${width} ${height}`)
+                    .append("g")
+                    .attr("transform", `translate(${width/2},${height/2})`)
+                    .selectAll("text")
+                    .data(words)
+                    .enter().append("text")
+                    .style("font-size", d => `${d.size}px`)
+                    .style("font-family", "Arial")
+                    .style("fill", () => d3.schemeCategory10[Math.floor(Math.random() * 10)])
+                    .attr("text-anchor", "middle")
+                    .attr("transform", d => `translate(${d.x},${d.y})rotate(${d.rotate})`)
+                    .text(d => d.text);
             }
         }
     </script>
