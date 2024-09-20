@@ -3,6 +3,9 @@
 
  You can also create a pie chart showcasing the sentiments of comments as negative, neutral, or positive (as well as a word cloud!). These are quite time-consuming though as they currently work by having an LLM individually classify each one.
 
+ To run:
+ - Run app.py and open your locally hosted website!
+
 Requires
 - Flask
 - Mistral (through Ollama)
